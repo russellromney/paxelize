@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+  cat <<'USAGE'
+paxelize: stage local agent history for Paxel
+
+Usage:
+  paxelize doctor
+  paxelize stage [--stage-dir DIR] [--current-link DIR] [--dry-run]
+  paxelize counts [--current-link DIR]
+  paxelize env [--current-link DIR]
+  paxelize run [--current-link DIR] [--paxel-url URL]
+  paxelize clean [--current-link DIR]
+
+Environment:
+  PAXELIZE_STAGE_DIR    Exact stage directory to create.
+  PAXELIZE_CURRENT      Stable symlink path.
+  PAXELIZE_PAXEL_URL    Paxel upload script URL.
+USAGE
+}
+
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+warn() {
+  echo "warning: $*" >&2
+}
+
+home="${HOME:?}"
+paxel_home="$home/.paxel"
+current="${PAXELIZE_CURRENT:-$paxel_home/all-agent-history-current}"
+paxel_url="${PAXELIZE_PAXEL_URL:-https://paxel.ycombinator.com/upload.sh}"
+
+command_name="${1:-}"
+[ -n "$command_name" ] || { usage; exit 1; }
+shift || true
+
+stage_dir="${PAXELIZE_STAGE_DIR:-}"
+dry_run=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --stage-dir)
+      [ "$#" -ge 2 ] || die "--stage-dir needs a value"
+      stage_dir="$2"
+      shift 2
+      ;;
+    --current-link)
+      [ "$#" -ge 2 ] || die "--current-link needs a value"
+      current="$2"
+      shift 2
+      ;;
+    --paxel-url)
+      [ "$#" -ge 2 ] || die "--paxel-url needs a value"
+      paxel_url="$2"
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+done
+
+timestamp() {
+  date +%Y%m%d-%H%M%S
+}
+
+human_count() {
+  tr -d ' '
+}
+
+count_jsonl() {
+  local dir="$1"
+  [ -d "$dir" ] || { echo 0; return; }
+  find "$dir" -name '*.jsonl' -type f 2>/dev/null | wc -l | human_count
+}
+
+count_opencode_sessions() {
+  local db="$1"
+  [ -f "$db" ] || { echo 0; return; }
+  command -v sqlite3 >/dev/null 2>&1 || { echo "unknown"; return; }
+  sqlite3 "$db" 'select count(*) from session;' 2>/dev/null || echo "unknown"
+}
+
+source_report() {
+  local claude_transcripts="$home/.claude/transcripts"
+  local claude_projects="$home/.claude/projects"
+  local codex_sessions="$home/.codex/sessions"
+  local codex_archived="$home/.codex/archived_sessions"
+  local opencode_db="$home/.local/share/opencode/opencode.db"
+
+  echo "Sources:"
+  printf '  %-28s %s\n' "Claude transcripts:" "$(count_jsonl "$claude_transcripts") JSONL"
+  printf '  %-28s %s\n' "Claude projects:" "$(count_jsonl "$claude_projects") JSONL"
+  printf '  %-28s %s\n' "Codex sessions:" "$(count_jsonl "$codex_sessions") JSONL"
+  printf '  %-28s %s\n' "Codex archived:" "$(count_jsonl "$codex_archived") JSONL"
+  printf '  %-28s %s\n' "opencode:" "$(count_opencode_sessions "$opencode_db") sessions"
+  echo
+  echo "Paths:"
+  printf '  %s\n' "$claude_transcripts"
+  printf '  %s\n' "$claude_projects"
+  printf '  %s\n' "$codex_sessions"
+  printf '  %s\n' "$codex_archived"
+  printf '  %s\n' "$opencode_db"
+}
+
+copy_dir_contents() {
+  local src="$1"
+  local dst="$2"
+
+  [ -d "$src" ] || return 0
+  mkdir -p "$dst"
+  rsync -a "$src"/ "$dst"/
+}
+
+stage_opencode_db() {
+  local src="$1"
+  local dst="$2"
+
+  [ -f "$src" ] || return 0
+  mkdir -p "$dst"
+
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$src" "VACUUM INTO '$dst/opencode.db';"
+  else
+    warn "sqlite3 not found; skipping opencode DB snapshot"
+  fi
+}
+
+stage_history() {
+  local target="$1"
+
+  mkdir -p "$target"/{claude/desktop-transcripts,codex,opencode}
+  chmod 700 "$paxel_home" "$target" 2>/dev/null || true
+
+  copy_dir_contents "$home/.claude/transcripts" "$target/claude/desktop-transcripts"
+  copy_dir_contents "$home/.claude/projects" "$target/claude/projects"
+  copy_dir_contents "$home/.codex/sessions" "$target/codex/sessions"
+  copy_dir_contents "$home/.codex/archived_sessions" "$target/codex/archived_sessions"
+  stage_opencode_db "$home/.local/share/opencode/opencode.db" "$target/opencode"
+
+  ln -sfn "$target" "$current"
+}
+
+print_env_command() {
+  local root="$1"
+
+  printf 'CLAUDE_DIR=%q CODEX_DIR=%q OPENCODE_DIR=%q curl -fsSL %q | bash\n' \
+    "$root/claude" "$root/codex" "$root/opencode" "$paxel_url"
+}
+
+stage_report() {
+  local root="$1"
+
+  echo "Staged Paxel agent history at: $(readlink "$current" 2>/dev/null || echo "$root")"
+  echo "Stable symlink: $current"
+  echo
+  echo "Counts:"
+  printf '  %-14s %s\n' "Claude JSONL:" "$(count_jsonl "$root/claude")"
+  printf '  %-14s %s\n' "Codex JSONL:" "$(count_jsonl "$root/codex")"
+  local opencode_db_count
+  opencode_db_count="$(find "$root/opencode" -maxdepth 1 -name 'opencode*.db' -type f 2>/dev/null | wc -l | human_count)"
+  printf '  %-14s %s\n' "opencode DBs:" "$opencode_db_count"
+  echo
+  echo "Run Paxel with:"
+  print_env_command "$root"
+}
+
+case "$command_name" in
+  doctor)
+    source_report
+    ;;
+  stage)
+    command -v rsync >/dev/null 2>&1 || die "rsync is required"
+    mkdir -p "$paxel_home"
+    chmod 700 "$paxel_home" 2>/dev/null || true
+    if [ -z "$stage_dir" ]; then
+      stage_dir="$paxel_home/all-agent-history-$(timestamp)"
+    fi
+    if [ "$dry_run" -eq 1 ]; then
+      source_report
+      echo
+      echo "Would stage into: $stage_dir"
+      echo "Would update symlink: $current"
+      exit 0
+    fi
+    stage_history "$stage_dir"
+    stage_report "$current"
+    ;;
+  env)
+    [ -d "$current" ] || die "missing staged history at $current; run 'paxelize stage' first"
+    print_env_command "$current"
+    ;;
+  counts)
+    [ -d "$current" ] || die "missing staged history at $current; run 'paxelize stage' first"
+    stage_report "$current"
+    ;;
+  run)
+    command -v curl >/dev/null 2>&1 || die "curl is required"
+    [ -d "$current" ] || die "missing staged history at $current; run 'paxelize stage' first"
+    export CLAUDE_DIR="$current/claude"
+    export CODEX_DIR="$current/codex"
+    export OPENCODE_DIR="$current/opencode"
+    curl -fsSL "$paxel_url" | bash
+    ;;
+  clean)
+    if [ -L "$current" ]; then
+      target="$(readlink "$current")"
+      rm -f "$current"
+      [ -n "${target:-}" ] && [ -d "$target" ] && rm -rf "$target"
+      echo "Removed $current and $target"
+    elif [ -d "$current" ]; then
+      rm -rf "$current"
+      echo "Removed $current"
+    else
+      echo "Nothing to clean at $current"
+    fi
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
