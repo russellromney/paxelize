@@ -2,6 +2,8 @@
 
 Stage local agent history so Paxel can find more of it.
 
+Unofficial helper. Not affiliated with YC or Paxel.
+
 Paxel already understands several agent history formats. The rough edge is that
 some tools put useful sessions outside Paxel's default search paths. `paxelize`
 copies those supported stores into one staging tree and prints the environment
