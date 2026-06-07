@@ -9,6 +9,7 @@ Usage:
   paxelize doctor
   paxelize stage [--stage-dir DIR] [--current-link DIR] [--dry-run]
   paxelize counts [--current-link DIR]
+  paxelize audit [--current-link DIR]
   paxelize env [--current-link DIR]
   paxelize run [--current-link DIR] [--paxel-url URL] [-- PAXEL_ARGS...]
   paxelize clean [--current-link DIR]
@@ -215,6 +216,109 @@ case "$command_name" in
   counts)
     [ -d "$current" ] || die "missing staged history at $current; run 'paxelize stage' first"
     stage_report "$current"
+    ;;
+  audit)
+    [ -d "$current" ] || die "missing staged history at $current; run 'paxelize stage' first"
+    command -v python3 >/dev/null 2>&1 || die "python3 is required for audit"
+    python3 - "$current/codex" <<'PY'
+import json
+import pathlib
+import collections
+import subprocess
+import os
+import sys
+
+root = pathlib.Path(sys.argv[1])
+rows = []
+
+for path in root.rglob("*.jsonl"):
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            first = json.loads(f.readline())
+    except Exception as exc:
+        rows.append({"path": str(path), "error": str(exc)})
+        continue
+
+    payload = first.get("payload", first)
+    cwd = payload.get("cwd") or ""
+    remote = (payload.get("git") or {}).get("repository_url") or ""
+    rows.append({
+        "path": str(path),
+        "cwd": cwd,
+        "remote": remote,
+        "originator": payload.get("originator") or "",
+        "timestamp": payload.get("timestamp") or "",
+    })
+
+def normalize(remote: str) -> str:
+    remote = remote.strip()
+    for prefix in ("ssh://", "https://", "http://"):
+        if remote.startswith(prefix):
+            remote = remote[len(prefix):]
+    if remote.startswith("git@") and ":" in remote:
+        host, rest = remote[4:].split(":", 1)
+        remote = f"{host}/{rest}"
+    if remote.endswith(".git"):
+        remote = remote[:-4]
+    return remote.rstrip("/")
+
+def git_remote(cwd: str) -> str:
+    if not cwd or not os.path.exists(cwd):
+        return ""
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", cwd, "remote", "get-url", "origin"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        return ""
+    return out
+
+errors = [r for r in rows if "error" in r]
+valid = [r for r in rows if "error" not in r]
+with_remote = [r for r in valid if r["remote"]]
+without_remote = [r for r in valid if not r["remote"]]
+worktrees = [r for r in valid if "/.codex/worktrees/" in r["cwd"]]
+
+resolved_without_remote = []
+unresolved_without_remote = []
+for row in without_remote:
+    fallback = git_remote(row["cwd"])
+    if fallback:
+        row["fallback_remote"] = fallback
+        resolved_without_remote.append(row)
+    else:
+        unresolved_without_remote.append(row)
+
+group_counts = collections.Counter()
+for row in with_remote:
+    group_counts[normalize(row["remote"])] += 1
+for row in resolved_without_remote:
+    group_counts[normalize(row["fallback_remote"])] += 1
+for row in unresolved_without_remote:
+    group_counts["(unattributed)"] += 1
+
+print("Codex audit")
+print(f"  JSONL files:              {len(rows)}")
+print(f"  parse errors:             {len(errors)}")
+print(f"  with repository_url:      {len(with_remote)}")
+print(f"  without repository_url:   {len(without_remote)}")
+print(f"  fallback-resolved cwd:    {len(resolved_without_remote)}")
+print(f"  unresolved/unattributed:  {len(unresolved_without_remote)}")
+print(f"  cwd under worktrees:      {len(worktrees)}")
+print()
+print("Groups Paxel should see after remote normalization:")
+for remote, count in group_counts.most_common():
+    print(f"  {count:4}  {remote}")
+
+if unresolved_without_remote:
+    print()
+    print("Unresolved sessions:")
+    for row in unresolved_without_remote:
+        print(f"  {row['path']}")
+        print(f"    cwd: {row['cwd'] or '(missing)'}")
+PY
     ;;
   run)
     command -v curl >/dev/null 2>&1 || die "curl is required"

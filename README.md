@@ -69,6 +69,13 @@ Check the currently staged copy:
 ./bin/paxelize counts
 ```
 
+Audit whether staged Codex sessions will group by repo remote instead of
+worktree folder name:
+
+```bash
+./bin/paxelize audit
+```
+
 ## Where Files Go
 
 By default, `paxelize stage` creates:
@@ -96,6 +103,7 @@ OPENCODE_DIR=~/.paxel/all-agent-history-current/opencode
 ```text
 paxelize stage [--stage-dir DIR] [--current-link DIR] [--dry-run]
 paxelize counts
+paxelize audit
 paxelize run [--paxel-url URL] [-- PAXEL_ARGS...]
 paxelize env
 paxelize doctor
