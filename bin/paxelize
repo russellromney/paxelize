@@ -163,8 +163,8 @@ stage_history() {
 print_env_command() {
   local root="$1"
 
-  printf 'CLAUDE_DIR=%q CODEX_DIR=%q OPENCODE_DIR=%q curl -fsSL %q | bash -s --' \
-    "$root/claude" "$root/codex" "$root/opencode" "$paxel_url"
+  printf 'curl -fsSL %q | CLAUDE_DIR=%q CODEX_DIR=%q OPENCODE_DIR=%q bash -s --' \
+    "$paxel_url" "$root/claude" "$root/codex" "$root/opencode"
   if [ "${#paxel_args[@]}" -gt 0 ]; then
     printf ' %q' "${paxel_args[@]}"
   fi

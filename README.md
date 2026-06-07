@@ -63,6 +63,9 @@ Or print the Paxel command and run it yourself:
 ./bin/paxelize env
 ```
 
+The printed command attaches `CLAUDE_DIR`, `CODEX_DIR`, and `OPENCODE_DIR` to
+the `bash` process that runs Paxel. That matters for shell pipelines.
+
 Check the currently staged copy:
 
 ```bash
