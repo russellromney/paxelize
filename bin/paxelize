@@ -10,7 +10,7 @@ Usage:
   paxelize stage [--stage-dir DIR] [--current-link DIR] [--dry-run]
   paxelize counts [--current-link DIR]
   paxelize env [--current-link DIR]
-  paxelize run [--current-link DIR] [--paxel-url URL]
+  paxelize run [--current-link DIR] [--paxel-url URL] [-- PAXEL_ARGS...]
   paxelize clean [--current-link DIR]
 
 Environment:
@@ -40,9 +40,15 @@ shift || true
 
 stage_dir="${PAXELIZE_STAGE_DIR:-}"
 dry_run=0
+paxel_args=()
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --)
+      shift
+      paxel_args=("$@")
+      break
+      ;;
     --stage-dir)
       [ "$#" -ge 2 ] || die "--stage-dir needs a value"
       stage_dir="$2"
@@ -156,8 +162,12 @@ stage_history() {
 print_env_command() {
   local root="$1"
 
-  printf 'CLAUDE_DIR=%q CODEX_DIR=%q OPENCODE_DIR=%q curl -fsSL %q | bash\n' \
+  printf 'CLAUDE_DIR=%q CODEX_DIR=%q OPENCODE_DIR=%q curl -fsSL %q | bash -s --' \
     "$root/claude" "$root/codex" "$root/opencode" "$paxel_url"
+  if [ "${#paxel_args[@]}" -gt 0 ]; then
+    printf ' %q' "${paxel_args[@]}"
+  fi
+  printf '\n'
 }
 
 stage_report() {
@@ -212,7 +222,7 @@ case "$command_name" in
     export CLAUDE_DIR="$current/claude"
     export CODEX_DIR="$current/codex"
     export OPENCODE_DIR="$current/opencode"
-    curl -fsSL "$paxel_url" | bash
+    bash -s -- "${paxel_args[@]}" < <(curl -fsSL "$paxel_url")
     ;;
   clean)
     if [ -L "$current" ]; then

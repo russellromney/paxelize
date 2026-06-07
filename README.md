@@ -51,6 +51,12 @@ Run Paxel against the staged copy:
 ./bin/paxelize run
 ```
 
+Run Paxel across every detected project:
+
+```bash
+./bin/paxelize run -- --all
+```
+
 Or print the Paxel command and run it yourself:
 
 ```bash
@@ -90,7 +96,7 @@ OPENCODE_DIR=~/.paxel/all-agent-history-current/opencode
 ```text
 paxelize stage [--stage-dir DIR] [--current-link DIR] [--dry-run]
 paxelize counts
-paxelize run [--paxel-url URL]
+paxelize run [--paxel-url URL] [-- PAXEL_ARGS...]
 paxelize env
 paxelize doctor
 paxelize clean
